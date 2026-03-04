@@ -15,6 +15,9 @@
 #rt-popup {
     display: none;
     position: fixed;
+    top: 20px;
+    left: 50%;
+    transform: translateX(-50%);
     flex-direction: column;
     background: var(--SmartThemeBlurTintColor, #1a1a2e);
     border: 1px solid var(--SmartThemeBorderColor, #333);
@@ -103,6 +106,24 @@
     font-size: 0.85em;
 }
 .rt-rule-del:hover { background: rgba(220, 53, 69, 1); }
+
+/* 옵션 */
+.rt-options {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+.rt-opt-label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.84em;
+    color: var(--SmartThemeBodyColor, #ccc);
+    cursor: pointer;
+}
+.rt-opt-label input[type="checkbox"] {
+    margin: 0;
+}
 
 /* 버튼 */
 .rt-actions {
