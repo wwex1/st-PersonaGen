@@ -147,13 +147,13 @@ async function mountSettings() {
 
     root.find('.pg_cache_clear').on('click', async function () {
         const total = cfg.history?.length || 0;
-        if (!total) { toastr.info('히스토리가 없습니다.'); return; }
-        if (await ctx.Popup.show.confirm(`히스토리 ${total}건을 삭제할까요?`, '캐시 초기화')) {
+        if (!total) { toastr.info('캐시가 없습니다.'); return; }
+        if (await ctx.Popup.show.confirm(`캐시 ${total}건을 삭제할까요?`, '캐시 초기화')) {
             cfg.history = [];
             cfg.viewIdx = -1;
             persist();
             removeBlock();
-            toastr.success('히스토리 초기화됨');
+            toastr.success('캐시 초기화됨');
         }
     });
 }
@@ -253,6 +253,10 @@ function showInputForm() {
                 <small>특징 / 성격</small>
                 <textarea class="pg-input-traits" rows="2" placeholder="비우면 자동 생성">${esc(lastInputs.traits || '')}</textarea>
             </div>
+            <label class="pg-form-check">
+                <input type="checkbox" class="pg-input-relation" ${lastInputs.relation ? 'checked' : ''} />
+                <span>{{char}}와의 관계 설정 포함</span>
+            </label>
             <div class="pg-form-actions">
                 <button class="pg-btn pg-btn-cancel">취소</button>
                 <button class="pg-btn pg-btn-primary pg-btn-generate">생성</button>
@@ -267,6 +271,7 @@ function showInputForm() {
             age: form.find('.pg-input-age').val().trim(),
             appearance: form.find('.pg-input-appearance').val().trim(),
             traits: form.find('.pg-input-traits').val().trim(),
+            relation: form.find('.pg-input-relation').prop('checked'),
         };
         lastInputs = inputs;
         generate(inputs, null);
@@ -379,7 +384,7 @@ function showResult() {
         generate(lastInputs, null);
     });
     block.find('.pg-do-delete').on('click', async () => {
-        if (await ctx.Popup.show.confirm(`히스토리 ${total}건을 삭제할까요?`, '전체 삭제')) {
+        if (await ctx.Popup.show.confirm(`캐시 ${total}건을 삭제할까요?`, '전체 삭제')) {
             cfg.history = [];
             cfg.viewIdx = -1;
             persist();
@@ -490,8 +495,17 @@ CRITICAL RULES:
 1. Analyze the FORMAT and STRUCTURE of {{char}}'s description carefully.
 2. Write {{user}}'s profile in the SAME FORMAT as {{char}}'s description (e.g., if {{char}} uses prose style, use prose; if {{char}} uses structured fields, use the same field names; if {{char}} uses W++, use W++; if {{char}} uses JSON, use JSON).
 3. The {{user}} character should fit naturally within the same world, setting, and tone as {{char}}. Use {{char}}'s description to understand the genre, era, atmosphere, and level of detail expected.
-4. Do NOT tie {{user}} directly to {{char}}. Do NOT define a specific relationship with {{char}} (e.g., lover, rival, friend, enemy). Do NOT reference {{char}} by name in the profile. {{user}} should be a standalone character who could work with any character in a similar setting.
-5. Any fields NOT specified by the user should be creatively filled in by you to match the setting and world.
+4. Any fields NOT specified by the user should be creatively filled in by you to match the setting and world.`;
+
+    if (inputs.relation) {
+        prompt += `
+5. Define a specific relationship between {{user}} and {{char}} that fits the setting naturally. This can be any type of relationship (friend, rival, colleague, lover, family, etc.) — choose what feels most compelling for the story. Include how they met or how they are connected.`;
+    } else {
+        prompt += `
+5. Do NOT tie {{user}} directly to {{char}}. Do NOT define a specific relationship with {{char}} (e.g., lover, rival, friend, enemy). Do NOT reference {{char}} by name in the profile. {{user}} should be a standalone character who could work with any character in a similar setting.`;
+    }
+
+    prompt += `
 
 ${langNote}
 ${detailMap[cfg.detailLevel] || detailMap.normal}`;
