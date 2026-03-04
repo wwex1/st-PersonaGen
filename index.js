@@ -20,6 +20,12 @@ jQuery(async () => {
         </div>
         <div class="rt-body">
             <div id="rt-rules"></div>
+            <div class="rt-options">
+                <label class="rt-opt-label">
+                    <input type="checkbox" id="rt-cut-infoblock" checked />
+                    <span>&lt;infoblock&gt; 위까지만 치환</span>
+                </label>
+            </div>
             <div class="rt-actions">
                 <div class="rt-btn rt-btn-add" id="rt-add">+ 규칙 추가</div>
                 <div class="rt-btn rt-btn-exec" id="rt-exec">🚀 치환 실행</div>
@@ -69,11 +75,22 @@ jQuery(async () => {
     }
 
     function applyRules(text, rules) {
-        let result = text;
-        for (const r of rules) {
-            result = result.split(r.find).join(r.replace);
+        const cutInfoblock = document.getElementById("rt-cut-infoblock").checked;
+        let target = text;
+        let suffix = "";
+
+        if (cutInfoblock) {
+            const idx = text.indexOf("<infoblock>");
+            if (idx !== -1) {
+                target = text.substring(0, idx);
+                suffix = text.substring(idx);
+            }
         }
-        return result;
+
+        for (const r of rules) {
+            target = target.split(r.find).join(r.replace);
+        }
+        return target + suffix;
     }
 
     // ── Raw 텍스트 가져오기 ──
@@ -117,20 +134,9 @@ jQuery(async () => {
         else if (typeof ctx.saveChat === "function") ctx.saveChat();
     }
 
-    // ── 팝업 위치 ──
+    // ── 팝업 위치 (상단 고정, 키보드 영향 없음) ──
     function posPopup() {
-        const vv = window.visualViewport;
-        const vH = vv ? vv.height : window.innerHeight;
-        const vT = vv ? vv.offsetTop : 0;
-        const vW = vv ? vv.width : window.innerWidth;
         popupEl.style.display = "flex";
-        popupEl.style.visibility = "hidden";
-        popupEl.style.transform = "none";
-        const pH = popupEl.offsetHeight;
-        const pW = popupEl.offsetWidth;
-        popupEl.style.visibility = "visible";
-        popupEl.style.top = (vT + Math.max(10, (vH - pH) / 2)) + "px";
-        popupEl.style.left = Math.max(5, (vW - pW) / 2) + "px";
     }
 
     // ── 열기/닫기 ──
@@ -190,11 +196,6 @@ jQuery(async () => {
     bgEl.addEventListener("click", closePopup);
     document.getElementById("rt-add").addEventListener("click", () => addRule());
     document.getElementById("rt-exec").addEventListener("click", executeReplace);
-
-    if (window.visualViewport) {
-        window.visualViewport.addEventListener("resize", () => { if (popupEl.classList.contains("rt-show")) posPopup(); });
-        window.visualViewport.addEventListener("scroll", () => { if (popupEl.classList.contains("rt-show")) posPopup(); });
-    }
 
     // ── 메시지 버튼 삽입 (에딧툴 가위 버튼과 동일 패턴) ──
     function upsertReplaceButtons() {
