@@ -1,0 +1,44 @@
+<div class="persona_gen_settings">
+    <div class="inline-drawer">
+        <div class="inline-drawer-toggle inline-drawer-header">
+            <b>Persona Gen</b>
+            <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
+        </div>
+        <div class="inline-drawer-content">
+
+            <div class="flex-container">
+                <label class="checkbox_label flex1" for="pg_enabled">
+                    <input type="checkbox" id="pg_enabled" class="pg_enabled" />
+                    <span>활성화</span>
+                </label>
+                <select id="pg_source" class="pg_source text_pole flex1"></select>
+            </div>
+
+            <hr />
+
+            <div class="flex-container">
+                <div class="flex-container flexFlowColumn flex1">
+                    <small>출력 언어</small>
+                    <select class="pg_lang text_pole">
+                        <option value="en">EN</option>
+                        <option value="ko">KO</option>
+                    </select>
+                </div>
+                <div class="flex-container flexFlowColumn flex1">
+                    <small>출력 길이</small>
+                    <select class="pg_detail text_pole">
+                        <option value="brief">간략</option>
+                        <option value="normal">보통</option>
+                        <option value="detailed">상세</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="flex-container flexFlowColumn" style="margin-top:8px;">
+                <small>추가 프롬프트 (선택)</small>
+                <textarea class="pg_extra_prompt text_pole" rows="3" placeholder="추가 지시사항이 있으면 입력..."></textarea>
+            </div>
+
+        </div>
+    </div>
+</div>
