@@ -12,12 +12,13 @@ const DEFAULTS = {
     lang: 'ko',
     detailLevel: 'normal',
     extraPrompt: '',
+    history: [],
+    viewIdx: -1,
 };
 
 let cfg = {};
 let ctx = null;
 let generating = false;
-let lastResult = '';
 let lastInputs = {};
 
 function persist() { ctx.saveSettingsDebounced(); }
@@ -143,6 +144,18 @@ async function mountSettings() {
     root.find('.pg_lang').val(cfg.lang).on('change', function () { cfg.lang = $(this).val(); persist(); });
     root.find('.pg_detail').val(cfg.detailLevel).on('change', function () { cfg.detailLevel = $(this).val(); persist(); });
     root.find('.pg_extra_prompt').val(cfg.extraPrompt).on('change', function () { cfg.extraPrompt = $(this).val(); persist(); });
+
+    root.find('.pg_cache_clear').on('click', async function () {
+        const total = cfg.history?.length || 0;
+        if (!total) { toastr.info('히스토리가 없습니다.'); return; }
+        if (await ctx.Popup.show.confirm(`히스토리 ${total}건을 삭제할까요?`, '캐시 초기화')) {
+            cfg.history = [];
+            cfg.viewIdx = -1;
+            persist();
+            removeBlock();
+            toastr.success('히스토리 초기화됨');
+        }
+    });
 }
 
 // ─── 이벤트 ───
@@ -163,7 +176,11 @@ function bindEvents() {
     menuBtn.addEventListener('click', () => {
         if (!cfg.enabled || generating) return;
         $('#extensionsMenu').hide();
-        showInputForm();
+        if (cfg.history.length > 0) {
+            showResult();
+        } else {
+            showInputForm();
+        }
     });
 
     const extMenu = document.getElementById('extensionsMenu');
@@ -220,15 +237,13 @@ function showInputForm() {
 
     const form = $(`
         <div class="pg-form">
-            <div class="pg-form-row">
-                <div class="pg-form-field">
-                    <small>이름</small>
-                    <input type="text" class="pg-input-name" placeholder="비우면 자동 생성" value="${esc(lastInputs.name || '')}" />
-                </div>
-                <div class="pg-form-field">
-                    <small>나이</small>
-                    <input type="text" class="pg-input-age" placeholder="비우면 자동 생성" value="${esc(lastInputs.age || '')}" />
-                </div>
+            <div class="pg-form-field">
+                <small>이름</small>
+                <input type="text" class="pg-input-name" placeholder="비우면 자동 생성" value="${esc(lastInputs.name || '')}" />
+            </div>
+            <div class="pg-form-field">
+                <small>나이</small>
+                <input type="text" class="pg-input-age" placeholder="비우면 자동 생성" value="${esc(lastInputs.age || '')}" />
             </div>
             <div class="pg-form-field">
                 <small>외모</small>
@@ -278,25 +293,53 @@ function showLoading() {
     scrollToBlock();
 }
 
-function showResult(text) {
+function showResult() {
     removeBlock();
-    lastResult = text;
+    if (!cfg.history.length) return;
+
+    const total = cfg.history.length;
+    const idx = cfg.viewIdx;
+    const text = cfg.history[idx];
 
     const block = $('<div id="pg-block" class="pg-block"></div>');
 
+    // 헤더
     const head = $('<div class="pg-block-head"></div>');
     head.append('<span class="pg-block-title">👤 페르소나 생성 결과</span>');
     const btns = $('<div class="pg-block-btns"></div>');
+
+    // 네비게이션
+    const nav = $('<div class="pg-nav"></div>');
+    const prevBtn = $('<button class="pg-nav-btn" title="이전">◀</button>');
+    const navLabel = $(`<span class="pg-nav-label">${idx + 1}/${total}</span>`);
+    const nextBtn = $('<button class="pg-nav-btn" title="다음">▶</button>');
+
+    if (idx <= 0) prevBtn.prop('disabled', true);
+    if (idx >= total - 1) nextBtn.prop('disabled', true);
+
+    prevBtn.on('click', () => {
+        if (cfg.viewIdx > 0) { cfg.viewIdx--; persist(); showResult(); }
+    });
+    nextBtn.on('click', () => {
+        if (cfg.viewIdx < cfg.history.length - 1) { cfg.viewIdx++; persist(); showResult(); }
+    });
+
+    nav.append(prevBtn, navLabel, nextBtn);
+    btns.append(nav);
     btns.append('<button class="pg-block-btn pg-do-back" title="입력으로 돌아가기">↩️</button>');
+    btns.append('<button class="pg-block-btn pg-do-refresh" title="재생성">🔄</button>');
+    btns.append('<button class="pg-block-btn pg-do-delete" title="전체 삭제">🗑️</button>');
     btns.append('<button class="pg-block-btn pg-do-close" title="닫기">✕</button>');
     head.append(btns);
     block.append(head);
 
+    // 결과
     const result = $(`
         <div class="pg-result">
             <div class="pg-result-text">${esc(text)}</div>
             <div class="pg-result-actions">
                 <button class="pg-result-act pg-act-copy">📋 복사</button>
+                <button class="pg-result-act pg-act-translate">🌐 번역</button>
             </div>
         </div>
     `);
@@ -304,6 +347,10 @@ function showResult(text) {
     result.find('.pg-act-copy').on('click', async () => {
         const ok = await copyToClipboard(text);
         if (ok) toastr.success('복사됨');
+    });
+
+    result.find('.pg-act-translate').on('click', () => {
+        translateResult(text);
     });
 
     block.append(result);
@@ -324,8 +371,22 @@ function showResult(text) {
 
     block.append(revise);
 
+    // 버튼 이벤트
     block.find('.pg-do-back').on('click', () => showInputForm());
     block.find('.pg-do-close').on('click', removeBlock);
+    block.find('.pg-do-refresh').on('click', () => {
+        if (generating) return;
+        generate(lastInputs, null);
+    });
+    block.find('.pg-do-delete').on('click', async () => {
+        if (await ctx.Popup.show.confirm(`히스토리 ${total}건을 삭제할까요?`, '전체 삭제')) {
+            cfg.history = [];
+            cfg.viewIdx = -1;
+            persist();
+            removeBlock();
+            toastr.success('전체 삭제됨');
+        }
+    });
 
     $('#chat').append(block);
     scrollToBlock();
@@ -347,7 +408,8 @@ async function generate(inputs, reviseText) {
     showLoading();
 
     try {
-        const instruction = buildPrompt(char, inputs, reviseText);
+        const baseResult = reviseText && cfg.history.length > 0 ? cfg.history[cfg.viewIdx] : null;
+        const instruction = buildPrompt(char, inputs, reviseText, baseResult);
         let raw = '';
 
         if (cfg.apiSource === 'main') {
@@ -361,7 +423,7 @@ async function generate(inputs, reviseText) {
             msgs.push({ role: 'user', content: instruction });
             if (!ctx.ConnectionManagerRequestService) throw new Error('Connection Manager 미로드');
             const resp = await ctx.ConnectionManagerRequestService.sendRequest(
-                cfg.connectionProfileId, msgs, 4000,
+                cfg.connectionProfileId, msgs, 10000,
                 { stream: false, extractData: true, includePreset: false, includeInstruct: false },
             ).catch(e => { throw new Error(`Profile 오류: ${e.message}`); });
 
@@ -375,12 +437,20 @@ async function generate(inputs, reviseText) {
         const parsed = parseResult(raw);
         if (!parsed) throw new Error('파싱 실패');
 
-        showResult(parsed);
+        cfg.history.push(parsed);
+        cfg.viewIdx = cfg.history.length - 1;
+        persist();
+
+        showResult();
 
     } catch (err) {
         console.error(`[${EXT_NAME}]`, err);
         toastr.error(`페르소나 생성 실패: ${err.message}`);
-        showInputForm();
+        if (cfg.history.length > 0) {
+            showResult();
+        } else {
+            showInputForm();
+        }
     } finally {
         generating = false;
     }
@@ -397,7 +467,7 @@ function buildSystemContext(char) {
     return t.trim();
 }
 
-function buildPrompt(char, inputs, reviseText) {
+function buildPrompt(char, inputs, reviseText, baseResult) {
     const langNote = cfg.lang === 'ko'
         ? '⚠️ 모든 출력을 한국어로 작성하세요.'
         : '⚠️ Write all output in English.';
@@ -435,8 +505,8 @@ ${detailMap[cfg.detailLevel] || detailMap.normal}`;
         prompt += `\n\nAdditional instructions:\n${cfg.extraPrompt}`;
     }
 
-    if (reviseText) {
-        prompt += `\n\n--- REVISION REQUEST ---\nThe previous output was:\n${lastResult}\n\nPlease revise according to this feedback:\n${reviseText}\n\nGenerate the COMPLETE revised profile, not just the changes.`;
+    if (reviseText && baseResult) {
+        prompt += `\n\n--- REVISION REQUEST ---\nThe previous output was:\n${baseResult}\n\nPlease revise according to this feedback:\n${reviseText}\n\nGenerate the COMPLETE revised profile, not just the changes.`;
     }
 
     prompt += `\n\nOUTPUT FORMAT:
@@ -453,11 +523,60 @@ ${detailMap[cfg.detailLevel] || detailMap.normal}`;
 function parseResult(raw) {
     if (!raw || !raw.trim()) return null;
     let text = raw.trim();
-    // 코드블록 제거
     text = text.replace(/^```[\s\S]*?\n/, '').replace(/\n?```\s*$/, '');
-    // 앞뒤 태그 제거
     text = text.replace(/^<[^>]+>\s*/i, '').replace(/\s*<\/[^>]+>$/i, '');
     return text.trim() || null;
+}
+
+// ─── 번역 ───
+
+async function translateResult(sourceText) {
+    if (generating || !sourceText) return;
+
+    generating = true;
+    showLoading();
+
+    try {
+        const targetLang = cfg.lang === 'ko' ? 'English' : '한국어';
+        const instruction = `Translate the following character profile into ${targetLang}. Keep the EXACT same format, structure, and field names (translate field names too). Output ONLY the translated profile, no explanation or commentary.\n\n${sourceText}`;
+
+        let raw = '';
+
+        if (cfg.apiSource === 'main') {
+            const { generateRaw } = ctx;
+            if (!generateRaw) throw new Error('generateRaw not available');
+            raw = await generateRaw({ systemPrompt: '', prompt: instruction, streaming: false });
+        } else {
+            const msgs = [{ role: 'user', content: instruction }];
+            if (!ctx.ConnectionManagerRequestService) throw new Error('Connection Manager 미로드');
+            const resp = await ctx.ConnectionManagerRequestService.sendRequest(
+                cfg.connectionProfileId, msgs, 10000,
+                { stream: false, extractData: true, includePreset: false, includeInstruct: false },
+            ).catch(e => { throw new Error(`Profile 오류: ${e.message}`); });
+
+            if (typeof resp === 'string') raw = resp;
+            else if (resp?.choices?.[0]?.message) {
+                const m = resp.choices[0].message;
+                raw = m.reasoning_content || m.content || '';
+            } else raw = resp?.content || resp?.message || '';
+        }
+
+        const parsed = parseResult(raw);
+        if (!parsed) throw new Error('번역 파싱 실패');
+
+        cfg.history.push(parsed);
+        cfg.viewIdx = cfg.history.length - 1;
+        persist();
+
+        showResult();
+
+    } catch (err) {
+        console.error(`[${EXT_NAME}]`, err);
+        toastr.error(`번역 실패: ${err.message}`);
+        showResult();
+    } finally {
+        generating = false;
+    }
 }
 
 // ─── 시작 ───
