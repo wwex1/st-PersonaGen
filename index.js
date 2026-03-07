@@ -197,33 +197,28 @@ jQuery(async () => {
     document.getElementById("rt-add").addEventListener("click", () => addRule());
     document.getElementById("rt-exec").addEventListener("click", executeReplace);
 
-    // ── 메시지 버튼 삽입 (에딧툴 가위 버튼과 동일 패턴) ──
+    // ── 메시지 버튼 삽입 ──
     function upsertReplaceButtons() {
         document.querySelectorAll(".mes").forEach(mes => {
             const mesId = mes.getAttribute("mesid");
             if (!mesId) return;
 
-            const target =
-                mes.querySelector(".extraMesButtons") ||
-                mes.querySelector(".mes_button") ||
-                mes.querySelector(".mes_buttons");
+            // 이미 삽입됐으면 스킵
+            if (mes.querySelector(".rt-mes-btn")) return;
+
+            const target = mes.querySelector(".extraMesButtons");
             if (!target) return;
 
-            let btn = target.querySelector(".rt-mes-btn");
-            if (!btn) {
-                btn = document.createElement("div");
-                btn.className = "rt-mes-btn mes_button";
-                btn.innerHTML = '<i class="fa-solid fa-right-left"></i>';
-                btn.title = "텍스트 치환";
-                btn.addEventListener("click", e => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    const id = mes.getAttribute("mesid");
-                    if (id) openPopup(id);
-                });
-                target.prepend(btn);
-            }
-            btn.dataset.mesid = mesId;
+            // 단일 구조 — ST 기본 버튼과 동일 패턴
+            const btn = document.createElement("div");
+            btn.className = "rt-mes-btn mes_button fa-solid fa-right-left";
+            btn.title = "텍스트 치환";
+            btn.addEventListener("click", e => {
+                e.preventDefault();
+                e.stopPropagation();
+                openPopup(mesId);
+            });
+            target.prepend(btn);
         });
     }
 
