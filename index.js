@@ -244,6 +244,7 @@ jQuery(async () => {
     bgEl.addEventListener("click", closePopup);
     document.getElementById("rt-add").addEventListener("click", () => addRule());
     document.getElementById("rt-exec").addEventListener("click", executeReplace);
+    document.getElementById("rt-cut-infoblock").addEventListener("change", updatePreview);
 
     // ── 메시지 버튼 삽입 ──
     function upsertReplaceButtons() {
