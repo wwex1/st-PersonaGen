@@ -22,7 +22,7 @@ jQuery(async () => {
             <div id="rt-rules"></div>
             <div class="rt-options">
                 <label class="rt-opt-label">
-                    <input type="checkbox" id="rt-cut-infoblock" checked />
+                    <input type="checkbox" id="rt-cut-infoblock" />
                     <span>&lt;infoblock&gt; 위까지만 치환</span>
                 </label>
             </div>
