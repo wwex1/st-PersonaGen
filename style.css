@@ -169,6 +169,14 @@
     margin-top: 4px;
 }
 
+/* 하이라이트 — 노란 형광펜 */
+.rt-hl {
+    background: rgba(255, 230, 0, 0.35);
+    color: #ffe600;
+    border-radius: 2px;
+    padding: 0 1px;
+}
+
 /* 메시지 버튼 — ST 기본 버튼과 동일 정렬 */
 .rt-mes-btn {
     cursor: pointer;
