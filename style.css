@@ -171,8 +171,8 @@
 
 /* 하이라이트 — 노란 형광펜 */
 .rt-hl {
-    background: rgba(255, 230, 0, 0.35);
-    color: #ffe600;
+    background: rgba(255, 230, 0, 0.2);
+    color: #222;
     border-radius: 2px;
     padding: 0 1px;
 }
