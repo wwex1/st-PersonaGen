@@ -74,6 +74,7 @@ jQuery(async () => {
         return rules;
     }
 
+    // ── 치환 적용 (실제 실행용) ──
     function applyRules(text, rules) {
         const cutInfoblock = document.getElementById("rt-cut-infoblock").checked;
         let target = text;
@@ -93,6 +94,54 @@ jQuery(async () => {
         return target + suffix;
     }
 
+    // ── 하이라이트 미리보기 (찾을 텍스트만 노란 형광펜) ──
+    function buildHighlightedPreview(text, rules) {
+        const cutInfoblock = document.getElementById("rt-cut-infoblock").checked;
+        let target = text;
+        let suffix = "";
+
+        if (cutInfoblock) {
+            const idx = text.indexOf("<infoblock>");
+            if (idx !== -1) {
+                target = text.substring(0, idx);
+                suffix = text.substring(idx);
+            }
+        }
+
+        // find 키워드 목록 (빈 문자열 제외)
+        const findTerms = rules.map(r => r.find).filter(f => f.length > 0);
+
+        if (findTerms.length === 0) {
+            return escapeHtml(target) + escapeHtml(suffix);
+        }
+
+        // 정규식 특수문자 이스케이프 후 OR로 결합
+        const escaped = findTerms.map(t => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+        const regex = new RegExp("(" + escaped.join("|") + ")", "g");
+
+        // target 영역만 하이라이트
+        const parts = target.split(regex);
+        const findSet = new Set(findTerms);
+        let html = "";
+        for (const part of parts) {
+            if (findSet.has(part)) {
+                html += '<span class="rt-hl">' + escapeHtml(part) + "</span>";
+            } else {
+                html += escapeHtml(part);
+            }
+        }
+
+        return html + escapeHtml(suffix);
+    }
+
+    function escapeHtml(str) {
+        return str
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;");
+    }
+
     // ── Raw 텍스트 가져오기 ──
     function getRawText(mesId) {
         try {
@@ -102,13 +151,12 @@ jQuery(async () => {
         return null;
     }
 
-    // ── 미리보기 ──
+    // ── 미리보기 업데이트 ──
     function updatePreview() {
         const raw = getRawText(currentMesId);
         if (!raw) return;
         const rules = getRules();
-        const result = applyRules(raw, rules);
-        previewEl.textContent = result;
+        previewEl.innerHTML = buildHighlightedPreview(raw, rules);
     }
 
     // ── DOM 업데이트 ──
@@ -146,7 +194,7 @@ jQuery(async () => {
         addRule();
 
         const raw = getRawText(currentMesId);
-        if (raw) previewEl.textContent = raw;
+        if (raw) previewEl.innerHTML = escapeHtml(raw);
         else previewEl.textContent = "(텍스트 없음)";
 
         badgeEl.textContent = "#" + currentMesId;
@@ -203,13 +251,11 @@ jQuery(async () => {
             const mesId = mes.getAttribute("mesid");
             if (!mesId) return;
 
-            // 이미 삽입됐으면 스킵
             if (mes.querySelector(".rt-mes-btn")) return;
 
             const target = mes.querySelector(".extraMesButtons");
             if (!target) return;
 
-            // 단일 구조 — ST 기본 버튼과 동일 패턴
             const btn = document.createElement("div");
             btn.className = "rt-mes-btn mes_button fa-solid fa-right-left";
             btn.title = "텍스트 치환";
@@ -222,7 +268,6 @@ jQuery(async () => {
         });
     }
 
-    // MutationObserver로 #chat 감시
     const chat = document.getElementById("chat");
     if (chat) {
         const observer = new MutationObserver(upsertReplaceButtons);
