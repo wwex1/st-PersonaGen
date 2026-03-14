@@ -338,8 +338,8 @@ jQuery(async () => {
         if (!text.trim()) throw new Error('텍스트를 입력하세요.');
         const isKo2En = settings.trDirection === 'ko2en';
         const instruction = isKo2En
-            ? `Translate the following Korean text into natural English. Output ONLY the translation, nothing else.\n\n${text}`
-            : `Translate the following English text into natural Korean. Output ONLY the translation, nothing else.\n\n${text}`;
+            ? `Translate the following Korean text into modern, casual English. Use natural phrasing that sounds like how people actually talk or write today — not stiff or textbook-style. Keep the original tone and nuance. Output ONLY the translation, nothing else.\n\n${text}`
+            : `다음 영어 텍스트를 자연스럽고 현대적인 한국어로 번역해. 딱딱한 번역체 말고, 실제로 사람들이 쓰는 자연스러운 표현으로. 원문의 톤과 뉘앙스를 유지해. 번역문만 출력해.\n\n${text}`;
 
         if (settings.trApiSource === 'main') {
             const ctx = getContext();
