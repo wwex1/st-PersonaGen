@@ -492,6 +492,13 @@ jQuery(async () => {
         if (trPopupEl) {
             trPopupEl.classList.remove('tr-show');
             trPopupEl.style.display = 'none';
+            // 입력·결과 초기화
+            const input = trPopupEl.querySelector('.tr-input');
+            const resultWrap = trPopupEl.querySelector('.tr-result-wrap');
+            const resultDiv = trPopupEl.querySelector('.tr-result');
+            if (input) input.value = '';
+            if (resultDiv) resultDiv.textContent = '';
+            if (resultWrap) resultWrap.style.display = 'none';
         }
     }
 
