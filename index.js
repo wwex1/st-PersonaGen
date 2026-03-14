@@ -1,16 +1,136 @@
 // ═══════════════════════════════════════════════════════
-// Replace Tool - 텍스트 치환 (SillyTavern Extension)
+// Replace Tool + Translate - 텍스트 치환 & 번역 (SillyTavern Extension)
 // ═══════════════════════════════════════════════════════
 
 const MODULE_NAME = "st-replace-tool";
+
+const TR_DEFAULTS = {
+    trEnabled: true,
+    trApiSource: 'main',
+    trConnectionProfileId: '',
+    trDirection: 'ko2en',
+};
 
 jQuery(async () => {
     console.log("[Replace Tool] 확장프로그램 로딩...");
 
     const { getContext } = SillyTavern;
 
-    // ── 팝업 HTML 삽입 ──
-    const popupHtml = `
+    // ─── 설정 ───
+    function getSettings() {
+        const { extensionSettings } = getContext();
+        if (!extensionSettings[MODULE_NAME]) {
+            extensionSettings[MODULE_NAME] = {};
+        }
+        const s = extensionSettings[MODULE_NAME];
+        for (const [k, v] of Object.entries(TR_DEFAULTS)) {
+            if (s[k] === undefined) s[k] = v;
+        }
+        return s;
+    }
+    function persist() { getContext().saveSettingsDebounced(); }
+
+    const settings = getSettings();
+
+    // ─── 복사 유틸 ───
+    async function copyToClipboard(text) {
+        if (navigator.clipboard?.writeText) {
+            try { await navigator.clipboard.writeText(text); return true; }
+            catch (e) { console.log(`[${MODULE_NAME}] clipboard API failed:`, e); }
+        }
+        try {
+            const ta = document.createElement('textarea');
+            ta.value = text;
+            ta.style.cssText = 'position:fixed;left:-9999px;top:-9999px;opacity:0;';
+            document.body.appendChild(ta);
+            ta.focus(); ta.select();
+            const ok = document.execCommand('copy');
+            document.body.removeChild(ta);
+            if (ok) return true;
+        } catch (e) { console.log(`[${MODULE_NAME}] textarea fallback failed:`, e); }
+        return false;
+    }
+
+    // ─── Connection Profile 탐지 ───
+    function discoverProfiles() {
+        const ctx = getContext();
+        const cmrs = ctx.ConnectionManagerRequestService;
+        if (!cmrs) return [];
+
+        const knownMethods = ['getConnectionProfiles', 'getAllProfiles', 'getProfiles', 'listProfiles'];
+        for (const m of knownMethods) {
+            if (typeof cmrs[m] === 'function') {
+                try {
+                    const result = cmrs[m]();
+                    if (Array.isArray(result) && result.length) return result;
+                } catch {}
+            }
+        }
+
+        try {
+            const proto = Object.getPrototypeOf(cmrs);
+            const dynamicMethods = Object.getOwnPropertyNames(proto)
+                .filter(k => typeof cmrs[k] === 'function' && /rofile/i.test(k) && !knownMethods.includes(k));
+            for (const m of dynamicMethods) {
+                try {
+                    const result = cmrs[m]();
+                    if (Array.isArray(result) && result.length) return result;
+                } catch {}
+            }
+        } catch {}
+
+        const paths = [
+            ctx.extensionSettings?.connectionManager?.profiles,
+            ctx.extensionSettings?.ConnectionManager?.profiles,
+            ctx.extensionSettings?.connection_manager?.profiles,
+        ];
+        for (const s of paths) {
+            if (!s) continue;
+            const arr = Array.isArray(s) ? s : Object.values(s);
+            if (arr.length) return arr;
+        }
+        return [];
+    }
+
+    function getProfileId(p) { return p.id || p.profileId || p.profile_id || p.uuid || ''; }
+    function getProfileName(p) { return p.name || p.profileName || p.profile_name || p.displayName || getProfileId(p); }
+
+    async function sendProfileRequest(msgs, maxTokens) {
+        const ctx = getContext();
+        const cmrs = ctx.ConnectionManagerRequestService;
+        if (!cmrs) throw new Error('Connection Manager 미로드');
+
+        const optionSets = [
+            { stream: false, extractData: true, includePreset: false, includeInstruct: false },
+            { streaming: false, extractData: true, includePreset: false, includeInstruct: false },
+            { stream: false, extractData: true },
+            { streaming: false },
+        ];
+
+        let lastError = null;
+        for (const opts of optionSets) {
+            try {
+                const resp = await cmrs.sendRequest(settings.trConnectionProfileId, msgs, maxTokens, opts);
+                if (typeof resp === 'string') return resp;
+                if (resp?.choices?.[0]?.message) {
+                    const m = resp.choices[0].message;
+                    return m.reasoning_content || m.content || '';
+                }
+                if (resp?.content) return resp.content;
+                if (resp?.message) return resp.message;
+                lastError = new Error('응답 형식 인식 실패');
+            } catch (e) {
+                lastError = e;
+            }
+        }
+        throw new Error(`Profile 오류: ${lastError?.message || '알 수 없는 오류'}`);
+    }
+
+    // ═════════════════════════════════════════════
+    // 🔄 파트 1: Replace Tool (텍스트 치환)
+    // ═════════════════════════════════════════════
+
+    const rtPopupHtml = `
     <div id="rt-bg"></div>
     <div id="rt-popup">
         <div class="rt-header">
@@ -36,17 +156,16 @@ jQuery(async () => {
             </div>
         </div>
     </div>`;
-    $("body").append(popupHtml);
+    $("body").append(rtPopupHtml);
 
-    const bgEl = document.getElementById("rt-bg");
-    const popupEl = document.getElementById("rt-popup");
+    const rtBgEl = document.getElementById("rt-bg");
+    const rtPopupEl = document.getElementById("rt-popup");
     const rulesEl = document.getElementById("rt-rules");
     const previewEl = document.getElementById("rt-preview");
     const badgeEl = document.getElementById("rt-msg-badge");
 
     let currentMesId = null;
 
-    // ── 규칙 관리 ──
     function addRule(findVal, replaceVal) {
         const rule = document.createElement("div");
         rule.className = "rt-rule";
@@ -74,92 +193,52 @@ jQuery(async () => {
         return rules;
     }
 
-    // ── 치환 적용 (실제 실행용) ──
     function applyRules(text, rules) {
         const cutInfoblock = document.getElementById("rt-cut-infoblock").checked;
-        let target = text;
-        let suffix = "";
-
+        let target = text, suffix = "";
         if (cutInfoblock) {
             const idx = text.indexOf("<infoblock>");
-            if (idx !== -1) {
-                target = text.substring(0, idx);
-                suffix = text.substring(idx);
-            }
+            if (idx !== -1) { target = text.substring(0, idx); suffix = text.substring(idx); }
         }
-
-        for (const r of rules) {
-            target = target.split(r.find).join(r.replace);
-        }
+        for (const r of rules) { target = target.split(r.find).join(r.replace); }
         return target + suffix;
     }
 
-    // ── 하이라이트 미리보기 (찾을 텍스트만 노란 형광펜) ──
     function buildHighlightedPreview(text, rules) {
         const cutInfoblock = document.getElementById("rt-cut-infoblock").checked;
-        let target = text;
-        let suffix = "";
-
+        let target = text, suffix = "";
         if (cutInfoblock) {
             const idx = text.indexOf("<infoblock>");
-            if (idx !== -1) {
-                target = text.substring(0, idx);
-                suffix = text.substring(idx);
-            }
+            if (idx !== -1) { target = text.substring(0, idx); suffix = text.substring(idx); }
         }
-
-        // find 키워드 목록 (빈 문자열 제외)
         const findTerms = rules.map(r => r.find).filter(f => f.length > 0);
-
-        if (findTerms.length === 0) {
-            return escapeHtml(target) + escapeHtml(suffix);
-        }
-
-        // 정규식 특수문자 이스케이프 후 OR로 결합
+        if (findTerms.length === 0) return escapeHtml(target) + escapeHtml(suffix);
         const escaped = findTerms.map(t => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
         const regex = new RegExp("(" + escaped.join("|") + ")", "g");
-
-        // target 영역만 하이라이트
         const parts = target.split(regex);
         const findSet = new Set(findTerms);
         let html = "";
         for (const part of parts) {
-            if (findSet.has(part)) {
-                html += '<span class="rt-hl">' + escapeHtml(part) + "</span>";
-            } else {
-                html += escapeHtml(part);
-            }
+            html += findSet.has(part) ? '<span class="rt-hl">' + escapeHtml(part) + "</span>" : escapeHtml(part);
         }
-
         return html + escapeHtml(suffix);
     }
 
     function escapeHtml(str) {
-        return str
-            .replace(/&/g, "&amp;")
-            .replace(/</g, "&lt;")
-            .replace(/>/g, "&gt;")
-            .replace(/"/g, "&quot;");
+        return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
     }
 
-    // ── Raw 텍스트 가져오기 ──
     function getRawText(mesId) {
-        try {
-            const ctx = getContext();
-            if (ctx && ctx.chat && ctx.chat[mesId]) return ctx.chat[mesId].mes;
-        } catch (e) {}
+        try { const ctx = getContext(); if (ctx?.chat?.[mesId]) return ctx.chat[mesId].mes; } catch {}
         return null;
     }
 
-    // ── 미리보기 업데이트 ──
     function updatePreview() {
         const raw = getRawText(currentMesId);
         if (!raw) return;
-        const rules = getRules();
-        previewEl.innerHTML = buildHighlightedPreview(raw, rules);
+        previewEl.innerHTML = buildHighlightedPreview(raw, getRules());
     }
 
-    // ── DOM 업데이트 ──
     function updateDOM(ctx, mesId, newText) {
         const el = document.querySelector('.mes[mesid="' + mesId + '"]');
         if (!el) return;
@@ -169,12 +248,8 @@ jQuery(async () => {
             if (typeof ctx.messageFormatting === "function") {
                 const c = ctx.chat[mesId];
                 mt.innerHTML = ctx.messageFormatting(newText, c.name, c.is_system, c.is_user, mesId);
-            } else {
-                mt.innerHTML = newText.replace(/\n/g, "<br>");
-            }
-        } catch (e) {
-            mt.innerHTML = newText.replace(/\n/g, "<br>");
-        }
+            } else { mt.innerHTML = newText.replace(/\n/g, "<br>"); }
+        } catch { mt.innerHTML = newText.replace(/\n/g, "<br>"); }
     }
 
     function doSaveChat(ctx) {
@@ -182,89 +257,60 @@ jQuery(async () => {
         else if (typeof ctx.saveChat === "function") ctx.saveChat();
     }
 
-    // ── 팝업 위치 (상단 고정, 키보드 영향 없음) ──
-    function posPopup() {
-        popupEl.style.display = "flex";
-    }
+    function rtPosPopup() { rtPopupEl.style.display = "flex"; }
 
-    // ── 열기/닫기 ──
-    function openPopup(mesId) {
+    function openRtPopup(mesId) {
         currentMesId = Number(mesId);
         rulesEl.innerHTML = "";
         addRule();
-
         const raw = getRawText(currentMesId);
-        if (raw) previewEl.innerHTML = escapeHtml(raw);
-        else previewEl.textContent = "(텍스트 없음)";
-
+        previewEl.innerHTML = raw ? escapeHtml(raw) : "(텍스트 없음)";
         badgeEl.textContent = "#" + currentMesId;
-
-        bgEl.classList.add("rt-show");
-        popupEl.classList.add("rt-show");
-        posPopup();
-        setTimeout(posPopup, 100);
+        rtBgEl.classList.add("rt-show");
+        rtPopupEl.classList.add("rt-show");
+        rtPosPopup();
+        setTimeout(rtPosPopup, 100);
     }
 
-    function closePopup() {
-        bgEl.classList.remove("rt-show");
-        popupEl.classList.remove("rt-show");
-        popupEl.style.display = "none";
+    function closeRtPopup() {
+        rtBgEl.classList.remove("rt-show");
+        rtPopupEl.classList.remove("rt-show");
+        rtPopupEl.style.display = "none";
         currentMesId = null;
     }
 
-    // ── 치환 실행 ──
     function executeReplace() {
         const ctx = getContext();
-        if (!ctx || !ctx.chat || currentMesId === null) return;
+        if (!ctx?.chat || currentMesId === null) return;
         const msg = ctx.chat[currentMesId];
         if (!msg) return;
-
         const rules = getRules();
-        if (rules.length === 0) {
-            if (typeof toastr !== "undefined") toastr.warning("치환 규칙을 입력해주세요.");
-            return;
-        }
-
+        if (rules.length === 0) { toastr.warning("치환 규칙을 입력해주세요."); return; }
         const newText = applyRules(msg.mes, rules);
-        if (newText === msg.mes) {
-            if (typeof toastr !== "undefined") toastr.info("변경된 내용이 없습니다.");
-            return;
-        }
-
+        if (newText === msg.mes) { toastr.info("변경된 내용이 없습니다."); return; }
         ctx.chat[currentMesId].mes = newText;
         updateDOM(ctx, currentMesId, newText);
         doSaveChat(ctx);
-
-        if (typeof toastr !== "undefined") toastr.success("치환 완료! (" + rules.length + "개 규칙)", "Replace Tool", { timeOut: 2000 });
-        closePopup();
+        toastr.success("치환 완료! (" + rules.length + "개 규칙)", "Replace Tool", { timeOut: 2000 });
+        closeRtPopup();
     }
 
-    // ── 이벤트 바인딩 ──
-    document.getElementById("rt-close").addEventListener("click", closePopup);
-    bgEl.addEventListener("click", closePopup);
+    document.getElementById("rt-close").addEventListener("click", closeRtPopup);
+    rtBgEl.addEventListener("click", closeRtPopup);
     document.getElementById("rt-add").addEventListener("click", () => addRule());
     document.getElementById("rt-exec").addEventListener("click", executeReplace);
     document.getElementById("rt-cut-infoblock").addEventListener("change", updatePreview);
 
-    // ── 메시지 버튼 삽입 ──
     function upsertReplaceButtons() {
         document.querySelectorAll(".mes").forEach(mes => {
             const mesId = mes.getAttribute("mesid");
-            if (!mesId) return;
-
-            if (mes.querySelector(".rt-mes-btn")) return;
-
+            if (!mesId || mes.querySelector(".rt-mes-btn")) return;
             const target = mes.querySelector(".extraMesButtons");
             if (!target) return;
-
             const btn = document.createElement("div");
             btn.className = "rt-mes-btn mes_button fa-solid fa-right-left";
             btn.title = "텍스트 치환";
-            btn.addEventListener("click", e => {
-                e.preventDefault();
-                e.stopPropagation();
-                openPopup(mesId);
-            });
+            btn.addEventListener("click", e => { e.preventDefault(); e.stopPropagation(); openRtPopup(mesId); });
             target.prepend(btn);
         });
     }
@@ -275,6 +321,266 @@ jQuery(async () => {
         observer.observe(chat, { childList: true, subtree: true });
         upsertReplaceButtons();
     }
+
+    console.log("[Replace Tool] 🔄 치환 기능 활성화!");
+
+    // ═════════════════════════════════════════════
+    // 🌐 파트 2: Translate (번역)
+    // ═════════════════════════════════════════════
+
+    let trModalOpen = false;
+    let trTranslating = false;
+    let trBgEl = null;
+    let trPopupEl = null;
+
+    // ── 번역 호출 ──
+    async function translate(text) {
+        if (!text.trim()) throw new Error('텍스트를 입력하세요.');
+        const isKo2En = settings.trDirection === 'ko2en';
+        const instruction = isKo2En
+            ? `Translate the following Korean text into natural English. Output ONLY the translation, nothing else.\n\n${text}`
+            : `Translate the following English text into natural Korean. Output ONLY the translation, nothing else.\n\n${text}`;
+
+        if (settings.trApiSource === 'main') {
+            const ctx = getContext();
+            const { generateRaw } = ctx;
+            if (!generateRaw) throw new Error('generateRaw not available');
+            return await generateRaw({ systemPrompt: '', prompt: instruction, streaming: false });
+        } else {
+            const msgs = [{ role: 'user', content: instruction }];
+            return await sendProfileRequest(msgs, 2000);
+        }
+    }
+
+    // ── DOM 생성 (한 번만) ──
+    function ensureTrDOM() {
+        if (trBgEl) return;
+
+        trBgEl = document.createElement('div');
+        trBgEl.id = 'tr-bg';
+        document.body.appendChild(trBgEl);
+
+        trPopupEl = document.createElement('div');
+        trPopupEl.id = 'tr-popup';
+
+        const dirLabel = () => settings.trDirection === 'ko2en' ? '한국어 → English' : 'English → 한국어';
+        const placeholder = () => settings.trDirection === 'ko2en' ? '한국어를 입력하세요...' : 'Enter English text...';
+
+        trPopupEl.innerHTML = `
+            <div class="tr-header">
+                <span class="tr-title">번역</span>
+                <span class="tr-close" title="닫기">✕</span>
+            </div>
+            <div class="tr-toggle">${dirLabel()}</div>
+            <textarea class="tr-input" placeholder="${placeholder()}" rows="4"></textarea>
+            <div class="tr-btn-translate">번역</div>
+            <div class="tr-result-wrap" style="display:none;">
+                <div class="tr-result"></div>
+                <div class="tr-copy" title="복사">📋 복사</div>
+            </div>
+            <div class="tr-loading" style="display:none;">
+                <div class="tr-dots"><span></span><span></span><span></span></div>
+                <span>번역 중...</span>
+            </div>
+        `;
+        document.body.appendChild(trPopupEl);
+
+        // 이벤트
+        const toggleBtn = trPopupEl.querySelector('.tr-toggle');
+        const input = trPopupEl.querySelector('.tr-input');
+        const translateBtn = trPopupEl.querySelector('.tr-btn-translate');
+        const resultWrap = trPopupEl.querySelector('.tr-result-wrap');
+        const resultDiv = trPopupEl.querySelector('.tr-result');
+        const copyBtn = trPopupEl.querySelector('.tr-copy');
+        const loading = trPopupEl.querySelector('.tr-loading');
+
+        trBgEl.addEventListener('click', closeTrModal);
+        trBgEl.addEventListener('touchend', (e) => { e.preventDefault(); closeTrModal(); });
+        trPopupEl.querySelector('.tr-close').addEventListener('click', closeTrModal);
+
+        toggleBtn.addEventListener('click', () => {
+            settings.trDirection = settings.trDirection === 'ko2en' ? 'en2ko' : 'ko2en';
+            persist();
+            toggleBtn.textContent = dirLabel();
+            input.placeholder = placeholder();
+        });
+
+        translateBtn.addEventListener('click', async () => {
+            if (trTranslating) return;
+            const text = input.value.trim();
+            if (!text) { toastr.warning('텍스트를 입력하세요.'); return; }
+            if (settings.trApiSource === 'profile' && !settings.trConnectionProfileId) {
+                toastr.warning('Connection Profile을 선택하세요.'); return;
+            }
+
+            trTranslating = true;
+            resultWrap.style.display = 'none';
+            loading.style.display = 'flex';
+            trPosPopup();
+
+            try {
+                const result = await translate(text);
+                const cleaned = result?.trim() || '';
+                if (!cleaned) throw new Error('빈 응답');
+                resultDiv.textContent = cleaned;
+                resultWrap.style.display = 'flex';
+            } catch (err) {
+                toastr.error(`번역 실패: ${err.message}`);
+            } finally {
+                loading.style.display = 'none';
+                trTranslating = false;
+                trPosPopup();
+            }
+        });
+
+        input.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); translateBtn.click(); }
+            if (e.key === 'Escape') { e.preventDefault(); closeTrModal(); }
+        });
+
+        copyBtn.addEventListener('click', async () => {
+            const ok = await copyToClipboard(resultDiv.textContent);
+            if (ok) toastr.success('복사됨');
+        });
+
+        if (window.visualViewport) {
+            window.visualViewport.addEventListener('resize', () => { if (trModalOpen) trPosPopup(); });
+            window.visualViewport.addEventListener('scroll', () => { if (trModalOpen) trPosPopup(); });
+        }
+    }
+
+    function trPosPopup() {
+        if (!trPopupEl) return;
+        const vv = window.visualViewport;
+        const vH = vv ? vv.height : window.innerHeight;
+        const vT = vv ? vv.offsetTop : 0;
+        const vW = vv ? vv.width : window.innerWidth;
+
+        trPopupEl.style.display = 'flex';
+        trPopupEl.style.visibility = 'hidden';
+        trPopupEl.style.transform = 'none';
+        const pH = trPopupEl.offsetHeight;
+        const pW = trPopupEl.offsetWidth;
+        trPopupEl.style.visibility = 'visible';
+
+        trPopupEl.style.top = (vT + Math.max(10, (vH - pH) / 2)) + 'px';
+        trPopupEl.style.left = Math.max(5, (vW - pW) / 2) + 'px';
+    }
+
+    function openTrModal() {
+        if (trModalOpen) return;
+        if (!settings.trEnabled) return;
+        trModalOpen = true;
+        ensureTrDOM();
+
+        const resultWrap = trPopupEl.querySelector('.tr-result-wrap');
+        const loading = trPopupEl.querySelector('.tr-loading');
+        resultWrap.style.display = 'none';
+        loading.style.display = 'none';
+
+        trBgEl.classList.add('tr-show');
+        trPopupEl.classList.add('tr-show');
+        trPosPopup();
+        setTimeout(trPosPopup, 50);
+        setTimeout(() => trPopupEl.querySelector('.tr-input').focus(), 100);
+    }
+
+    function closeTrModal() {
+        if (!trModalOpen) return;
+        trModalOpen = false;
+        if (trBgEl) trBgEl.classList.remove('tr-show');
+        if (trPopupEl) {
+            trPopupEl.classList.remove('tr-show');
+            trPopupEl.style.display = 'none';
+        }
+    }
+
+    // ── 확장 메뉴 버튼 ──
+    function updateTrMenuVisibility() {
+        const btn = document.getElementById('tr_menu_btn');
+        if (btn) btn.style.display = settings.trEnabled ? '' : 'none';
+    }
+
+    const trMenuBtn = document.createElement('div');
+    trMenuBtn.id = 'tr_menu_btn';
+    trMenuBtn.className = 'list-group-item flex-container flexGap5 interactable';
+    trMenuBtn.title = '번역';
+    trMenuBtn.innerHTML = '<i class="fa-solid fa-language"></i> 번역';
+    trMenuBtn.style.display = settings.trEnabled ? '' : 'none';
+    trMenuBtn.addEventListener('click', () => {
+        $('#extensionsMenu').hide();
+        openTrModal();
+    });
+
+    const extMenu = document.getElementById('extensionsMenu');
+    if (extMenu) {
+        extMenu.appendChild(trMenuBtn);
+    } else {
+        const obs = new MutationObserver((_, o) => {
+            const m = document.getElementById('extensionsMenu');
+            if (m) { m.appendChild(trMenuBtn); o.disconnect(); }
+        });
+        obs.observe(document.body, { childList: true, subtree: true });
+    }
+
+    console.log("[Replace Tool] 🌐 번역 기능 활성화!");
+
+    // ═════════════════════════════════════════════
+    // ⚙️ 파트 3: 설정 패널
+    // ═════════════════════════════════════════════
+
+    const settingsHtml = `
+    <div class="rt-settings">
+        <div class="inline-drawer">
+            <div class="inline-drawer-toggle inline-drawer-header">
+                <b>Replace Tool + 번역</b>
+                <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
+            </div>
+            <div class="inline-drawer-content">
+                <hr />
+                <h4 style="margin:6px 0 4px;">🌐 번역 설정</h4>
+                <label class="checkbox_label">
+                    <input type="checkbox" id="rt-tr-enabled" />
+                    <span>번역 버튼 표시</span>
+                </label>
+                <label style="margin-top:6px;display:block;font-size:0.9em;">API 소스</label>
+                <select id="rt-tr-source" class="text_pole" style="width:100%;margin-top:4px;"></select>
+            </div>
+        </div>
+    </div>`;
+    $("#extensions_settings2").append(settingsHtml);
+
+    // 번역 활성화 체크박스
+    const trEnabledEl = document.getElementById('rt-tr-enabled');
+    trEnabledEl.checked = settings.trEnabled;
+    trEnabledEl.addEventListener('change', function () {
+        settings.trEnabled = this.checked;
+        persist();
+        updateTrMenuVisibility();
+        toastr.info(settings.trEnabled ? '번역 활성화됨' : '번역 비활성화됨');
+    });
+
+    // API 소스 드롭다운
+    const trSourceEl = document.getElementById('rt-tr-source');
+    trSourceEl.innerHTML = '<option value="main">Main API</option>';
+    try {
+        const profiles = discoverProfiles();
+        profiles.forEach(p => {
+            const id = getProfileId(p);
+            const name = getProfileName(p);
+            if (id) trSourceEl.insertAdjacentHTML('beforeend', `<option value="profile:${id}">${name}</option>`);
+        });
+    } catch {}
+
+    const currentSourceVal = settings.trApiSource === 'profile' && settings.trConnectionProfileId
+        ? `profile:${settings.trConnectionProfileId}` : 'main';
+    trSourceEl.value = currentSourceVal;
+    trSourceEl.addEventListener('change', function () {
+        const val = this.value;
+        if (val === 'main') { settings.trApiSource = 'main'; settings.trConnectionProfileId = ''; }
+        else { settings.trApiSource = 'profile'; settings.trConnectionProfileId = val.replace('profile:', ''); }
+        persist();
+    });
 
     console.log("[Replace Tool] 로드 완료!");
 });
